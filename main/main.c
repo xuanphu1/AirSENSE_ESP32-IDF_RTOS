@@ -80,6 +80,16 @@ __attribute__((unused)) static const char *TAG = "Main";
 #define QUEUE_SIZE 10U
 #define NAME_FILE_QUEUE_SIZE 5U
 
+#define WIFI_EVEN_HANDLE (1 << 0)
+#define MQTT_EVEN_HANDLE (1 << 1)
+#define MQTT_PUBLISH_MESSEAGE_TASK (1 << 2)
+#define GET_DATA_FROM_SENSOR_TASK (1 << 3)
+#define SAVE_DATA_SENSOR_TO_SDCARD (1 << 4)
+
+
+int64_t startTime;
+
+EventGroupHandle_t taskCompletionEventGroup;
 static EventGroupHandle_t fileStore_eventGroup;
 
 #define WIFI_CONNECTED_BIT BIT0
@@ -115,6 +125,8 @@ QueueHandle_t dateTimeLostWiFi_queue;
 QueueHandle_t dataSensorIntermediate_queue;
 
 static struct statusDevice_st statusDevice = {0};
+
+
 
 static char nameFileSaveData[21];
 char mqttTopic[32];
@@ -212,6 +224,7 @@ static esp_err_t WiFi_eventHandler(void *argument, system_event_t *event)
     default:
         break;
     }
+    xEventGroupSetBits(taskCompletionEventGroup,WIFI_EVEN_HANDLE);
     return ESP_OK;
 }
 
@@ -310,6 +323,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         ESP_LOGI(__func__, "Other event id:%d", event->event_id);
         break;
     }
+    xEventGroupSetBits(taskCompletionEventGroup,MQTT_EVEN_HANDLE);
 }
 
 /**
@@ -371,6 +385,7 @@ void mqttPublishMessage_task(void *parameters)
             // Suspend ourselves.
             vTaskSuspend(NULL);
         }
+        xEventGroupSetBits(taskCompletionEventGroup,MQTT_PUBLISH_MESSEAGE_TASK);
     }
 }
 
@@ -528,6 +543,7 @@ void getDataFromSensor_task(void *parameters)
         }
         memset(&dataSensorTemp, 0, sizeof(struct dataSensor_st));
         memset(&moduleErrorTemp, 0, sizeof(struct moduleError_st));
+        xEventGroupSetBits(taskCompletionEventGroup,GET_DATA_FROM_SENSOR_TASK);
         vTaskDelayUntil(&task_lastWakeTime, PERIOD_GET_DATA_FROM_SENSOR);
     }
 };
@@ -799,8 +815,34 @@ void saveDataSensorToSDcard_task(void *parameters)
                 continue;
             }
         }
-
+        xEventGroupSetBits(taskCompletionEventGroup,SAVE_DATA_SENSOR_TO_SDCARD);
         vTaskDelay(PERIOD_SAVE_DATA_SENSOR_TO_SDCARD);
+    }
+};
+
+void Eventgroup_setupDeepSleep(void *parameters) {
+    
+    while(1) {
+        // Đợi cho tất cả các task khác hoàn thành công việc
+        
+        EventBits_t bits = xEventGroupWaitBits( taskCompletionEventGroup, WIFI_EVEN_HANDLE | MQTT_EVEN_HANDLE | MQTT_PUBLISH_MESSEAGE_TASK | 
+                                                GET_DATA_FROM_SENSOR_TASK | SAVE_DATA_SENSOR_TO_SDCARD, pdTRUE, pdTRUE, portMAX_DELAY);
+        int64_t endTime = esp_timer_get_time();
+
+        int64_t elapsedTime = endTime - startTime;
+
+        // Nếu các task đã hoàn thành
+        // Kích hoạt deep sleep với thời gian còn lại
+        int64_t remainingTime = 5000000 - elapsedTime;
+        if (remainingTime > 0) {
+            deep_sleep_register_rtc_timer_wakeup(remainingTime);
+
+            deep_sleep();
+        }
+        
+        // Reset các bit cho các task
+        xEventGroupClearBits(taskCompletionEventGroup,  WIFI_EVEN_HANDLE | MQTT_EVEN_HANDLE | MQTT_PUBLISH_MESSEAGE_TASK | 
+                                                        GET_DATA_FROM_SENSOR_TASK | SAVE_DATA_SENSOR_TO_SDCARD);
     }
 };
 
@@ -972,6 +1014,8 @@ void app_main(void)
     } else {
         ESP_LOGE(__func__, "Create task AllocateData failed.");
     }
+
+    xTaskCreate(Eventgroup_setupDeepSleep,"SetUpDeepSleep",(1024*16),NULL,(UBaseType_t)10,NULL);
 
 #if (CONFIG_USING_WIFI)
     WIFI_initSTA();
