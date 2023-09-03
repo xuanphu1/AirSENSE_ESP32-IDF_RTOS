@@ -824,14 +824,6 @@ void saveDataSensorToSDcard_task(void *parameters)
     }
 };
 
-#define SNTP_GET_TIME_TASK (1 << 0)
-#define ALLOCATE_DATA_TO_MQTT_AND_SD_QUEUE_TASK (1 << 1)
-#define MQTT_PUBLISH_MESSEAGE_TASK (1 << 2)
-#define GET_DATA_FROM_SENSOR_TASK (1 << 3)
-#define SAVE_DATA_SENSOR_TO_SDCARD (1 << 4)
-#define FILE_EVENT_TASK (1 << 5)
-#define SEND_DATA_SENSOR_TO_MQTT_SEVER_AFTER_RECONNECT_WIFI_TASK (1 << 6)
-
 void Eventgroup_setupDeepSleep(void *parameters) {
     
     while(1) {
