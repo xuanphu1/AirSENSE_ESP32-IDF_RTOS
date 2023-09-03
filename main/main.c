@@ -80,16 +80,18 @@ __attribute__((unused)) static const char *TAG = "Main";
 #define QUEUE_SIZE 10U
 #define NAME_FILE_QUEUE_SIZE 5U
 
-#define WIFI_EVEN_HANDLE (1 << 0)
-#define MQTT_EVEN_HANDLE (1 << 1)
+#define SNTP_GET_TIME_TASK (1 << 0)
+#define ALLOCATE_DATA_TO_MQTT_AND_SD_QUEUE_TASK (1 << 1)
 #define MQTT_PUBLISH_MESSEAGE_TASK (1 << 2)
 #define GET_DATA_FROM_SENSOR_TASK (1 << 3)
 #define SAVE_DATA_SENSOR_TO_SDCARD (1 << 4)
-
+#define FILE_EVENT_TASK (1 << 5)
+#define SEND_DATA_SENSOR_TO_MQTT_SEVER_AFTER_RECONNECT_WIFI_TASK (1 << 6)
 
 int64_t startTime;
 
 EventGroupHandle_t taskCompletionEventGroup;
+
 static EventGroupHandle_t fileStore_eventGroup;
 
 #define WIFI_CONNECTED_BIT BIT0
@@ -224,7 +226,6 @@ static esp_err_t WiFi_eventHandler(void *argument, system_event_t *event)
     default:
         break;
     }
-    xEventGroupSetBits(taskCompletionEventGroup,WIFI_EVEN_HANDLE);
     return ESP_OK;
 }
 
@@ -323,7 +324,6 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         ESP_LOGI(__func__, "Other event id:%d", event->event_id);
         break;
     }
-    xEventGroupSetBits(taskCompletionEventGroup,MQTT_EVEN_HANDLE);
 }
 
 /**
@@ -436,6 +436,7 @@ void sntpGetTime_task(void *parameter)
             ESP_ERROR_CHECK_WITHOUT_ABORT(ds3231_setTime(&ds3231_device, &timeInfo));
             xEventGroupSetBits(fileStore_eventGroup, FILE_RENAME_FROMSYNC);
         }
+        xEventGroupSetBits(taskCompletionEventGroup,SNTP_GET_TIME_TASK);
         vTaskDelete(NULL);
     } while (0);
 }
@@ -597,6 +598,7 @@ void allocateDataToMQTTandSDQueue_task(void *parameters)
                 continue;
             }
         }
+        xEventGroupSetBits(taskCompletionEventGroup,ALLOCATE_DATA_TO_MQTT_AND_SD_QUEUE_TASK);
         vTaskDelay(100 / portTICK_RATE_MS);
     }
 }
@@ -683,6 +685,7 @@ void fileEvent_task(void *parameters)
             }
             xSemaphoreGive(file_semaphore);
         }
+        xEventGroupSetBits(taskCompletionEventGroup,FILE_EVENT_TASK);
     }
 };
 
@@ -766,6 +769,7 @@ void sendDataSensorToMQTTServerAfterReconnectWiFi_task(void *parameters)
             // After read all data from "..._noWifi" file in SD card, delete that file
             ESP_ERROR_CHECK_WITHOUT_ABORT(sdcard_removeFile(nameFileSaveDataLostWiFi));
         }
+        xEventGroupSetBits(taskCompletionEventGroup,SEND_DATA_SENSOR_TO_MQTT_SEVER_AFTER_RECONNECT_WIFI_TASK);
         // Suspend ourselves.
         vTaskSuspend(NULL);
     }
@@ -820,13 +824,22 @@ void saveDataSensorToSDcard_task(void *parameters)
     }
 };
 
+#define SNTP_GET_TIME_TASK (1 << 0)
+#define ALLOCATE_DATA_TO_MQTT_AND_SD_QUEUE_TASK (1 << 1)
+#define MQTT_PUBLISH_MESSEAGE_TASK (1 << 2)
+#define GET_DATA_FROM_SENSOR_TASK (1 << 3)
+#define SAVE_DATA_SENSOR_TO_SDCARD (1 << 4)
+#define FILE_EVENT_TASK (1 << 5)
+#define SEND_DATA_SENSOR_TO_MQTT_SEVER_AFTER_RECONNECT_WIFI_TASK (1 << 6)
+
 void Eventgroup_setupDeepSleep(void *parameters) {
     
     while(1) {
         // Đợi cho tất cả các task khác hoàn thành công việc
-        
-        EventBits_t bits = xEventGroupWaitBits( taskCompletionEventGroup, WIFI_EVEN_HANDLE | MQTT_EVEN_HANDLE | MQTT_PUBLISH_MESSEAGE_TASK | 
-                                                GET_DATA_FROM_SENSOR_TASK | SAVE_DATA_SENSOR_TO_SDCARD, pdTRUE, pdTRUE, portMAX_DELAY);
+
+        EventBits_t bits = xEventGroupWaitBits( taskCompletionEventGroup,   SNTP_GET_TIME_TASK | ALLOCATE_DATA_TO_MQTT_AND_SD_QUEUE_TASK | MQTT_PUBLISH_MESSEAGE_TASK | 
+                                                GET_DATA_FROM_SENSOR_TASK | SAVE_DATA_SENSOR_TO_SDCARD | FILE_EVENT_TASK | 
+                                                SEND_DATA_SENSOR_TO_MQTT_SEVER_AFTER_RECONNECT_WIFI_TASK, pdTRUE, pdTRUE, portMAX_DELAY);
         int64_t endTime = esp_timer_get_time();
 
         int64_t elapsedTime = endTime - startTime;
@@ -841,8 +854,9 @@ void Eventgroup_setupDeepSleep(void *parameters) {
         }
         
         // Reset các bit cho các task
-        xEventGroupClearBits(taskCompletionEventGroup,  WIFI_EVEN_HANDLE | MQTT_EVEN_HANDLE | MQTT_PUBLISH_MESSEAGE_TASK | 
-                                                        GET_DATA_FROM_SENSOR_TASK | SAVE_DATA_SENSOR_TO_SDCARD);
+        xEventGroupClearBits(taskCompletionEventGroup,  NTP_GET_TIME_TASK | ALLOCATE_DATA_TO_MQTT_AND_SD_QUEUE_TASK | MQTT_PUBLISH_MESSEAGE_TASK | 
+                                                        GET_DATA_FROM_SENSOR_TASK | SAVE_DATA_SENSOR_TO_SDCARD | FILE_EVENT_TASK | 
+                                                        SEND_DATA_SENSOR_TO_MQTT_SEVER_AFTER_RECONNECT_WIFI_TASK);
     }
 };
 
